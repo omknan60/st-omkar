@@ -14,6 +14,7 @@
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
 #include <X11/XKBlib.h>
+#include <arpa/inet.h>
 
 char *argv0;
 #include "arg.h"
@@ -83,6 +84,7 @@ typedef XftGlyphFontSpec GlyphFontSpec;
 typedef struct {
 	int tw, th; /* tty width and height */
 	int w, h; /* window width and height */
+	int x, y; /* window location */
 	int ch; /* char height */
 	int cw; /* char width  */
 	int mode; /* window state/mode flags */
@@ -103,6 +105,7 @@ typedef struct {
 		XVaNestedList spotlist;
 	} ime;
 	Draw draw;
+	GC bggc;          /* Graphics Context for background */
 	Visual *vis;
 	XSetWindowAttributes attrs;
 	int scr;
@@ -153,6 +156,9 @@ static void ximinstantiate(Display *, XPointer, XPointer);
 static void ximdestroy(XIM, XPointer, XPointer);
 static int xicdestroy(XIC, XPointer, XPointer);
 static void xinit(int, int);
+static void updatexy(void);
+static XImage *loadff(const char *);
+static void bginit();
 static void cresize(int, int);
 static void xresize(int, int);
 static void xhints(void);
@@ -517,6 +523,12 @@ propnotify(XEvent *e)
 			 xpev->atom == clipboard)) {
 		selnotify(e);
 	}
+
+	if (pseudotransparency &&
+	    !strncmp(XGetAtomName(xw.dpy, e->xproperty.atom), "_NET_WM_STATE", 13)) {
+		updatexy();
+		redraw();
+	}
 }
 
 void
@@ -547,7 +559,8 @@ selnotify(XEvent *e)
 			return;
 		}
 
-		if (e->type == PropertyNotify && nitems == 0 && rem == 0) {
+		if (e->type == PropertyNotify && nitems == 0 && rem == 0 &&
+		    !pseudotransparency) {
 			/*
 			 * If there is some PropertyNotify with no data, then
 			 * this is the signal of the selection owner that all
@@ -565,9 +578,11 @@ selnotify(XEvent *e)
 			 * when the selection owner does send us the next
 			 * chunk of data.
 			 */
-			MODBIT(xw.attrs.event_mask, 1, PropertyChangeMask);
-			XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask,
+			if (!pseudotransparency) {
+				MODBIT(xw.attrs.event_mask, 1, PropertyChangeMask);
+				XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask,
 					&xw.attrs);
+			}
 
 			/*
 			 * Deleting the property is the transfer start signal.
@@ -688,7 +703,7 @@ setsel(char *str, Time t)
 	XSetSelectionOwner(xw.dpy, XA_PRIMARY, xw.win, t);
 	if (XGetSelectionOwner(xw.dpy, XA_PRIMARY) != xw.win)
 		selclear();
-	clipcopy(NULL);
+  clipcopy(NULL);
 }
 
 void
@@ -854,9 +869,9 @@ xsetcolorname(int x, const char *name)
 void
 xclear(int x1, int y1, int x2, int y2)
 {
-	XftDrawRect(xw.draw,
-			&dc.col[IS_SET(MODE_REVERSE)? defaultfg : defaultbg],
-			x1, y1, x2-x1, y2-y1);
+	if (pseudotransparency)
+		XSetTSOrigin(xw.dpy, xw.bggc, -win.x, -win.y);
+	XFillRectangle(xw.dpy, xw.buf, xw.bggc, x1, y1, x2-x1, y2-y1);
 }
 
 void
@@ -1240,6 +1255,102 @@ xinit(int cols, int rows)
 	xsel.xtarget = XInternAtom(xw.dpy, "UTF8_STRING", 0);
 	if (xsel.xtarget == None)
 		xsel.xtarget = XA_STRING;
+
+	boxdraw_xinit(xw.dpy, xw.cmap, xw.draw, xw.vis);
+}
+
+void
+updatexy()
+{
+	Window child;
+	XTranslateCoordinates(xw.dpy, xw.win, DefaultRootWindow(xw.dpy), 0, 0,
+	                      &win.x, &win.y, &child);
+}
+
+/*
+ * load farbfeld file to XImage
+ */
+XImage*
+loadff(const char *filename)
+{
+	uint32_t i, hdr[4], w, h, size;
+	uint64_t *data;
+	FILE *f = fopen(filename, "rb");
+
+	if (f == NULL) {
+		fprintf(stderr, "Can not open background image file\n");
+		return NULL;
+	}
+
+	if (fread(hdr, sizeof(*hdr), LEN(hdr), f) != LEN(hdr))
+		if (ferror(f)) {
+			fprintf(stderr, "fread:");
+			return NULL;
+		}
+		else {
+			fprintf(stderr, "fread: Unexpected end of file\n");
+			return NULL;
+		}
+
+	if (memcmp("farbfeld", hdr, sizeof("farbfeld") - 1)) {
+		fprintf(stderr, "Invalid magic value\n");
+		return NULL;
+	}
+
+	w = ntohl(hdr[2]);
+	h = ntohl(hdr[3]);
+	size = w * h;
+	data = malloc(size * sizeof(uint64_t));
+
+	if (fread(data, sizeof(uint64_t), size, f) != size)
+		if (ferror(f)) {
+			fprintf(stderr, "fread:");
+			return NULL;
+		}
+		else {
+			fprintf(stderr, "fread: Unexpected end of file\n");
+			return NULL;
+		}
+
+	fclose(f);
+
+	for (i = 0; i < size; i++)
+		data[i] = (data[i] & 0x00000000000000FF) << 16 |
+			  (data[i] & 0x0000000000FF0000) >> 8  |
+			  (data[i] & 0x000000FF00000000) >> 32;
+
+	XImage *xi = XCreateImage(xw.dpy, DefaultVisual(xw.dpy, xw.scr),
+	                            DefaultDepth(xw.dpy, xw.scr), ZPixmap, 0,
+	                            (char *)data, w, h, 32, w * 8);
+	xi->bits_per_pixel = 64;
+	return xi;
+}
+
+/*
+ * initialize background image
+ */
+void
+bginit()
+{
+	XGCValues gcvalues;
+	Drawable bgimg;
+	XImage *bgxi = loadff(bgfile);
+
+	memset(&gcvalues, 0, sizeof(gcvalues));
+	xw.bggc = XCreateGC(xw.dpy, xw.win, 0, &gcvalues);
+	if (!bgxi) return;
+	bgimg = XCreatePixmap(xw.dpy, xw.win, bgxi->width, bgxi->height,
+	                      DefaultDepth(xw.dpy, xw.scr));
+	XPutImage(xw.dpy, bgimg, dc.gc, bgxi, 0, 0, 0, 0, bgxi->width,
+	          bgxi->height);
+	XDestroyImage(bgxi);
+	XSetTile(xw.dpy, xw.bggc, bgimg);
+	XSetFillStyle(xw.dpy, xw.bggc, FillTiled);
+	if (pseudotransparency) {
+		updatexy();
+		MODBIT(xw.attrs.event_mask, 1, PropertyChangeMask);
+		XChangeWindowAttributes(xw.dpy, xw.win, CWEventMask, &xw.attrs);
+	}
 }
 
 int
@@ -1286,8 +1397,13 @@ xmakeglyphfontspecs(XftGlyphFontSpec *specs, const Glyph *glyphs, int len, int x
 			yp = winy + font->ascent;
 		}
 
-		/* Lookup character index with default font. */
-		glyphidx = XftCharIndex(xw.dpy, font->match, rune);
+		if (mode & ATTR_BOXDRAW) {
+			/* minor shoehorning: boxdraw uses only this ushort */
+			glyphidx = boxdrawindex(&glyphs[i]);
+		} else {
+			/* Lookup character index with default font. */
+			glyphidx = XftCharIndex(xw.dpy, font->match, rune);
+		}
 		if (glyphidx) {
 			specs[numspecs].font = font->match;
 			specs[numspecs].glyph = glyphidx;
@@ -1482,7 +1598,10 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 		xclear(winx, winy + win.ch, winx + width, win.h);
 
 	/* Clean up the region we want to draw to. */
-	XftDrawRect(xw.draw, bg, winx, winy, width, win.ch);
+	if (bg == &dc.col[defaultbg])
+		xclear(winx, winy, winx + width, winy + win.ch);
+	else
+		XftDrawRect(xw.draw, bg, winx, winy, width, win.ch);
 
 	/* Set the clip region because Xft is sometimes dirty. */
 	r.x = 0;
@@ -1491,8 +1610,12 @@ xdrawglyphfontspecs(const XftGlyphFontSpec *specs, Glyph base, int len, int x, i
 	r.width = width;
 	XftDrawSetClipRectangles(xw.draw, winx, winy, &r, 1);
 
-	/* Render the glyphs. */
-	XftDrawGlyphFontSpec(xw.draw, fg, specs, len);
+	if (base.mode & ATTR_BOXDRAW) {
+		drawboxes(winx, winy, width / len, win.ch, fg, bg, specs, len);
+	} else {
+		/* Render the glyphs. */
+		XftDrawGlyphFontSpec(xw.draw, fg, specs, len);
+	}
 
 	/* Render underline and strikethrough. */
 	if (base.mode & ATTR_UNDERLINE) {
@@ -1535,7 +1658,7 @@ xdrawcursor(int cx, int cy, Glyph g, int ox, int oy, Glyph og)
 	/*
 	 * Select the right color for the right mode.
 	 */
-	g.mode &= ATTR_BOLD|ATTR_ITALIC|ATTR_UNDERLINE|ATTR_STRUCK|ATTR_WIDE;
+	g.mode &= ATTR_BOLD|ATTR_ITALIC|ATTR_UNDERLINE|ATTR_STRUCK|ATTR_WIDE|ATTR_BOXDRAW;
 
 	if (IS_SET(MODE_REVERSE)) {
 		g.mode |= ATTR_REVERSE;
@@ -1836,7 +1959,7 @@ void
 kpress(XEvent *ev)
 {
 	XKeyEvent *e = &ev->xkey;
-	KeySym ksym;
+	KeySym ksym = NoSymbol;
 	char buf[64], *customkey;
 	int len;
 	Rune c;
@@ -1846,10 +1969,13 @@ kpress(XEvent *ev)
 	if (IS_SET(MODE_KBDLOCK))
 		return;
 
-	if (xw.ime.xic)
+	if (xw.ime.xic) {
 		len = XmbLookupString(xw.ime.xic, e, buf, sizeof buf, &ksym, &status);
-	else
+		if (status == XBufferOverflow)
+			return;
+	} else {
 		len = XLookupString(e, buf, sizeof buf, &ksym, NULL);
+	}
 	/* 1. shortcuts */
 	for (bp = shortcuts; bp < shortcuts + LEN(shortcuts); bp++) {
 		if (ksym == bp->keysym && match(bp->mod, e->state)) {
@@ -1905,9 +2031,17 @@ cmessage(XEvent *e)
 void
 resize(XEvent *e)
 {
-	if (e->xconfigure.width == win.w && e->xconfigure.height == win.h)
-		return;
-
+	if (pseudotransparency) {
+		if (e->xconfigure.width == win.w &&
+		    e->xconfigure.height == win.h &&
+		    e->xconfigure.x == win.x && e->xconfigure.y == win.y)
+			return;
+		updatexy();
+	} else {
+		if (e->xconfigure.width == win.w &&
+		    e->xconfigure.height == win.h)
+			return;
+	}
 	cresize(e->xconfigure.width, e->xconfigure.height);
 }
 
@@ -2091,6 +2225,7 @@ run:
 	rows = MAX(rows, 1);
 	tnew(cols, rows);
 	xinit(cols, rows);
+	bginit();
 	xsetenv();
 	selinit();
 	run();
