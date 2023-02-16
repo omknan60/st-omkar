@@ -5,16 +5,8 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "Source Code Pro:pixelsize=16:antialias=true:autohint=true";
+static char *font = "Roboto Mono:pixelsize=16:antialias=true:autohint=true";
 static int borderpx = 2;
-
-/*
- * background image
- * expects farbfeld format
- * pseudo transparency fixes coordinates to the screen origin
- */
-static const char *bgfile = "/home/omkar/Pictures/wallpapers/st.ff";
-static const int pseudotransparency = 0;
 
 /*
  * What program is execed by st depends of these precedence rules:
@@ -76,18 +68,6 @@ static unsigned int blinktimeout = 800;
 static unsigned int cursorthickness = 2;
 
 /*
- * 1: render most of the lines/blocks characters without using the font for
- *    perfect alignment between cells (U2500 - U259F except dashes/diagonals).
- *    Bold affects lines thickness if boxdraw_bold is not 0. Italic is ignored.
- * 0: disable (render all U25XX glyphs normally from the font).
- */
-const int boxdraw = 0;
-const int boxdraw_bold = 0;
-
-/* braille (U28XX):  1: render as adjacent "pixels",  0: use font */
-const int boxdraw_braille = 0;
-
-/*
  * bell volume. It must be a value between -100 and 100. Use 0 for disabling
  * it
  */
@@ -115,39 +95,45 @@ unsigned int tabspaces = 8;
 
 /* Terminal colors (16 first used in escape sequence) */
 static const char *colorname[] = {
+	/* 8 normal colors */
+	[0] = "#000000",
+	[1] = "#cc0403",
+	[2] = "#19cb00",
+	[3] = "#cecb00",
+	[4] = "#0d73cc",
+	[5] = "#cb1ed1",
+	[6] = "#0dcdcd",
+	[7] = "#dddddd",
 
+	/* 8 bright colors */
+	[8] = "#767676",
+	[9] = "#f2201f",
+	[10] = "#23fd00",
+	[11] = "#fffd00",
+	[12] = "#1a8fff",
+	[13] = "#fd28ff",
+	[14] = "#14ffff",
+	[15] = "#ffffff",
 
-  /* 8 normal colors */
-  [0] = "#282828", /* hard contrast: #1d2021 / soft contrast: #32302f */
-  [1] = "#ea6962", /* red     */
-  [2] = "#a9b665", /* green   */
-  [3] = "#d8a657", /* yellow  */
-  [4] = "#7daea3", /* blue    */
-  [5] = "#d3869b", /* magenta */
-  [6] = "#89b482", /* cyan    */
-  [7] = "#d4be98", /* white   */
+	[255] = 0,
 
-  /* 8 bright colors */
-  [8]  = "#928374", /* black   */
-  [9]  = "#ef938e", /* red     */
-  [10] = "#bbc585", /* green   */
-  [11] = "#e1bb7e", /* yellow  */
-  [12] = "#9dc2ba", /* blue    */
-  [13] = "#e1acbb", /* magenta */
-  [14] = "#a7c7a2", /* cyan    */
-  [15] = "#e2d3ba", /* white   */
+	/* more colors can be added after 255 to use with DefaultXX */
+    [256] = "#111111",
+    [257] = "#cccccc",
+    [258] = "#000000",
+    [259] = "#dddddd",
+
 };
+
 
 /*
  * Default colors (colorname index)
- * foreground, background, cursor
+ * foreground, background, cursor, reverse cursor
  */
-
-
-unsigned int defaultfg = 15;
-unsigned int defaultbg = 0;
-unsigned int defaultcs = 15;
-static unsigned int defaultrcs = 257;
+unsigned int defaultfg = 259;
+unsigned int defaultbg = 258;
+unsigned int defaultcs = 257;
+static unsigned int defaultrcs = 256;
 
 /*
  * Default shape of cursor
@@ -295,7 +281,7 @@ static Key key[] = {
 	{ XK_KP_Delete,     ControlMask,    "\033[3;5~",    +1,    0},
 	{ XK_KP_Delete,     ShiftMask,      "\033[2K",      -1,    0},
 	{ XK_KP_Delete,     ShiftMask,      "\033[3;2~",    +1,    0},
-	{ XK_KP_Delete,     XK_ANY_MOD,     "\033[P",       -1,    0},
+	{ XK_KP_Delete,     XK_ANY_MOD,     "\033[3~",       -1,    0},
 	{ XK_KP_Delete,     XK_ANY_MOD,     "\033[3~",      +1,    0},
 	{ XK_KP_Multiply,   XK_ANY_MOD,     "\033Oj",       +2,    0},
 	{ XK_KP_Add,        XK_ANY_MOD,     "\033Ok",       +2,    0},
@@ -363,7 +349,7 @@ static Key key[] = {
 	{ XK_Delete,        ControlMask,    "\033[3;5~",    +1,    0},
 	{ XK_Delete,        ShiftMask,      "\033[2K",      -1,    0},
 	{ XK_Delete,        ShiftMask,      "\033[3;2~",    +1,    0},
-	{ XK_Delete,        XK_ANY_MOD,     "\033[P",       -1,    0},
+	{ XK_Delete,        XK_ANY_MOD,     "\033[3~",       -1,    0},
 	{ XK_Delete,        XK_ANY_MOD,     "\033[3~",      +1,    0},
 	{ XK_BackSpace,     XK_NO_MOD,      "\177",          0,    0},
 	{ XK_BackSpace,     Mod1Mask,       "\033\177",      0,    0},
